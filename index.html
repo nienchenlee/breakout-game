@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>打磚塊遊戲</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #0f172a; /* slate-900 */
+        color: #e2e8f0; /* slate-200 */
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 20px;
+        font-weight: 600;
+        color: #f8fafc;
+      }
+
+      #gameCanvas {
+        background: #111827; /* gray-900 */
+        border: 1px solid #334155; /* slate-700 */
+        border-radius: 8px;
+        display: block;
+      }
+
+      .hud {
+        width: 640px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .score {
+        font-weight: 600;
+      }
+
+      button {
+        appearance: none;
+        border: 1px solid #475569; /* slate-600 */
+        background: #1f2937; /* gray-800 */
+        color: #e5e7eb; /* gray-200 */
+        padding: 6px 12px;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: #374151; /* gray-700 */
+      }
+
+      .overlay {
+        position: absolute;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+      }
+
+      .overlay.show {
+        display: flex;
+      }
+
+      .overlay .message {
+        background: rgba(2, 6, 23, 0.7);
+        border: 1px solid #475569;
+        color: #f8fafc;
+        padding: 12px 16px;
+        border-radius: 8px;
+        font-size: 18px;
+        pointer-events: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>打磚塊遊戲</h1>
+      <div style="position: relative; width: 640px; height: 420px;">
+        <canvas id="gameCanvas" width="640" height="420"></canvas>
+        <div id="overlay" class="overlay">
+          <div id="overlayMsg" class="message">遊戲開始！</div>
+        </div>
+      </div>
+      <div class="hud">
+        <div class="score">分數：<span id="scoreEl">0</span></div>
+        <div>操作：鍵盤左右鍵移動擋板</div>
+        <button id="restartBtn">重新開始</button>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        /**
+         * 遊戲設定
+         */
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('scoreEl');
+        const overlay = document.getElementById('overlay');
+        const overlayMsg = document.getElementById('overlayMsg');
+        const restartBtn = document.getElementById('restartBtn');
+
+        const CANVAS_W = canvas.width;
+        const CANVAS_H = canvas.height;
+
+        // 擋板
+        const PADDLE_WIDTH = 96;
+        const PADDLE_HEIGHT = 12;
+        const PADDLE_MARGIN_BOTTOM = 24;
+        const PADDLE_SPEED = 6;
+
+        // 球
+        const BALL_RADIUS = 7;
+        const BALL_SPEED = 4;
+
+        // 磚塊
+        const BRICK_ROWS = 5;
+        const BRICK_COLS = 10;
+        const BRICK_WIDTH = 56;
+        const BRICK_HEIGHT = 18;
+        const BRICK_PADDING = 8;
+        const BRICK_OFFSET_TOP = 50;
+        const BRICK_OFFSET_LEFT = 20;
+
+        // 分數
+        const SCORE_PER_BRICK = 10;
+
+        let leftPressed = false;
+        let rightPressed = false;
+        let animationId = null;
+
+        const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+        function createPaddle() {
+          return {
+            width: PADDLE_WIDTH,
+            height: PADDLE_HEIGHT,
+            x: (CANVAS_W - PADDLE_WIDTH) / 2,
+            y: CANVAS_H - PADDLE_MARGIN_BOTTOM - PADDLE_HEIGHT,
+            speed: PADDLE_SPEED,
+          };
+        }
+
+        function createBall() {
+          return {
+            x: CANVAS_W / 2,
+            y: CANVAS_H - PADDLE_MARGIN_BOTTOM - PADDLE_HEIGHT - BALL_RADIUS - 2,
+            radius: BALL_RADIUS,
+            dx: BALL_SPEED * (Math.random() > 0.5 ? 1 : -1),
+            dy: -BALL_SPEED,
+          };
+        }
+
+        function createBricks() {
+          const bricks = [];
+          for (let r = 0; r < BRICK_ROWS; r++) {
+            const row = [];
+            for (let c = 0; c < BRICK_COLS; c++) {
+              const x = BRICK_OFFSET_LEFT + c * (BRICK_WIDTH + BRICK_PADDING);
+              const y = BRICK_OFFSET_TOP + r * (BRICK_HEIGHT + BRICK_PADDING);
+              row.push({ x, y, width: BRICK_WIDTH, height: BRICK_HEIGHT, broken: false });
+            }
+            bricks.push(row);
+          }
+          return bricks;
+        }
+
+        let paddle = createPaddle();
+        let ball = createBall();
+        let bricks = createBricks();
+        let score = 0;
+        let remainingBricks = BRICK_ROWS * BRICK_COLS;
+        let isGameOver = false;
+        let isWin = false;
+
+        function resetGame() {
+          paddle = createPaddle();
+          ball = createBall();
+          bricks = createBricks();
+          score = 0;
+          remainingBricks = BRICK_ROWS * BRICK_COLS;
+          isGameOver = false;
+          isWin = false;
+          scoreEl.textContent = String(score);
+          hideOverlay();
+          if (animationId) cancelAnimationFrame(animationId);
+          loop();
+        }
+
+        function showOverlay(message) {
+          overlayMsg.textContent = message;
+          overlay.classList.add('show');
+        }
+
+        function hideOverlay() {
+          overlay.classList.remove('show');
+        }
+
+        /**
+         * 繪製
+         */
+        function drawPaddle() {
+          ctx.fillStyle = '#22d3ee';
+          ctx.fillRect(paddle.x, paddle.y, paddle.width, paddle.height);
+        }
+
+        function drawBall() {
+          ctx.beginPath();
+          ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+          ctx.closePath();
+          ctx.fillStyle = '#fbbf24';
+          ctx.fill();
+        }
+
+        function drawBricks() {
+          ctx.fillStyle = '#60a5fa';
+          for (let r = 0; r < BRICK_ROWS; r++) {
+            for (let c = 0; c < BRICK_COLS; c++) {
+              const b = bricks[r][c];
+              if (!b.broken) {
+                ctx.fillRect(b.x, b.y, b.width, b.height);
+              }
+            }
+          }
+        }
+
+        /**
+         * 邏輯
+         */
+        function movePaddle() {
+          if (leftPressed) {
+            paddle.x -= paddle.speed;
+          } else if (rightPressed) {
+            paddle.x += paddle.speed;
+          }
+          paddle.x = clamp(paddle.x, 0, CANVAS_W - paddle.width);
+        }
+
+        function moveBall() {
+          ball.x += ball.dx;
+          ball.y += ball.dy;
+
+          // 牆壁碰撞（左右）
+          if (ball.x + ball.radius > CANVAS_W || ball.x - ball.radius < 0) {
+            ball.dx = -ball.dx;
+            ball.x = clamp(ball.x, ball.radius, CANVAS_W - ball.radius);
+          }
+
+          // 牆壁碰撞（上）
+          if (ball.y - ball.radius < 0) {
+            ball.dy = -ball.dy;
+            ball.y = ball.radius;
+          }
+
+          // 底部落下：遊戲結束
+          if (ball.y - ball.radius > CANVAS_H) {
+            isGameOver = true;
+            endGame(false);
+          }
+        }
+
+        function collideBallWithPaddle() {
+          const withinX = ball.x > paddle.x && ball.x < paddle.x + paddle.width;
+          const withinY = ball.y + ball.radius >= paddle.y && ball.y - ball.radius <= paddle.y + paddle.height;
+          if (withinX && withinY && ball.dy > 0) {
+            // 依相對碰撞位置調整反彈角度
+            const collidePoint = (ball.x - (paddle.x + paddle.width / 2)) / (paddle.width / 2);
+            // 限制 -1 ~ 1
+            const clamped = clamp(collidePoint, -1, 1);
+            const angle = clamped * (Math.PI / 3); // 最大 60 度
+            const speed = Math.hypot(ball.dx, ball.dy);
+            ball.dx = speed * Math.sin(angle);
+            ball.dy = -Math.abs(speed * Math.cos(angle));
+            // 確保球不會卡進擋板
+            ball.y = paddle.y - ball.radius - 0.01;
+          }
+        }
+
+        function collideBallWithBricks() {
+          for (let r = 0; r < BRICK_ROWS; r++) {
+            for (let c = 0; c < BRICK_COLS; c++) {
+              const b = bricks[r][c];
+              if (b.broken) continue;
+              const withinX = ball.x + ball.radius > b.x && ball.x - ball.radius < b.x + b.width;
+              const withinY = ball.y + ball.radius > b.y && ball.y - ball.radius < b.y + b.height;
+              if (withinX && withinY) {
+                // 簡單碰撞反彈：判斷哪個方向的穿越較小
+                const overlapLeft = ball.x + ball.radius - b.x;
+                const overlapRight = b.x + b.width - (ball.x - ball.radius);
+                const overlapTop = ball.y + ball.radius - b.y;
+                const overlapBottom = b.y + b.height - (ball.y - ball.radius);
+                const minOverlapX = Math.min(overlapLeft, overlapRight);
+                const minOverlapY = Math.min(overlapTop, overlapBottom);
+
+                if (minOverlapX < minOverlapY) {
+                  ball.dx = -ball.dx;
+                } else {
+                  ball.dy = -ball.dy;
+                }
+
+                b.broken = true;
+                score += SCORE_PER_BRICK;
+                scoreEl.textContent = String(score);
+                remainingBricks--;
+                if (remainingBricks === 0) {
+                  isWin = true;
+                  endGame(true);
+                }
+                return; // 一次只碰一塊磚
+              }
+            }
+          }
+        }
+
+        function endGame(win) {
+          if (animationId) cancelAnimationFrame(animationId);
+          showOverlay(win ? `你贏了！總分：${score}` : '遊戲結束，按「重新開始」再試一次');
+        }
+
+        /**
+         * 事件
+         */
+        function keyDownHandler(e) {
+          if (e.key === 'ArrowLeft' || e.key === 'Left') leftPressed = true;
+          if (e.key === 'ArrowRight' || e.key === 'Right') rightPressed = true;
+        }
+
+        function keyUpHandler(e) {
+          if (e.key === 'ArrowLeft' || e.key === 'Left') leftPressed = false;
+          if (e.key === 'ArrowRight' || e.key === 'Right') rightPressed = false;
+        }
+
+        document.addEventListener('keydown', keyDownHandler);
+        document.addEventListener('keyup', keyUpHandler);
+        restartBtn.addEventListener('click', resetGame);
+
+        /**
+         * 遊戲主循環
+         */
+        function update() {
+          movePaddle();
+          moveBall();
+          collideBallWithPaddle();
+          collideBallWithBricks();
+        }
+
+        function draw() {
+          ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+          drawBricks();
+          drawPaddle();
+          drawBall();
+        }
+
+        function loop() {
+          if (isGameOver || isWin) return; // 已在 endGame 停止
+          update();
+          draw();
+          animationId = requestAnimationFrame(loop);
+        }
+
+        // 初始化
+        hideOverlay();
+        loop();
+      })();
+    </script>
+  </body>
+  </html>
+
+
